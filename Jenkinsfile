@@ -1,18 +1,27 @@
 pipeline {
     agent any
 
+    options {
+        timestamps()
+    }
+
     parameters {
-        string(
+        choice(
             name: 'ENVIRONMENT',
-            defaultValue: 'blue',
-            description: 'Environment (blue/green)'
+            choices: ['blue', 'green'],
+            description: 'Select environment to deploy'
         )
+    }
+
+    environment {
+        TF_IN_AUTOMATION = "true"
     }
 
     stages {
 
         stage('Checkout') {
             steps {
+                echo "Checking out source code..."
                 git branch: 'main',
                     url: 'https://github.com/bhargavdevopsaws/terraform-bluegreen-pipeline.git'
             }
@@ -20,19 +29,28 @@ pipeline {
 
         stage('Verify Environment Folder') {
             steps {
-                sh 'echo "Root directory content:" && ls -l'
-                sh "echo \"Contents of '${params.ENVIRONMENT}/':\" && ls -l ${params.ENVIRONMENT}"
+                sh '''
+                    echo "Root directory content:"
+                    ls -l
+                '''
+                sh """
+                    echo "Checking ${params.ENVIRONMENT} folder..."
+                    ls -l ${params.ENVIRONMENT}
+                """
             }
         }
 
         stage('Terraform Init') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-access'
-                ]]) {
-                    dir("${params.ENVIRONMENT}") {
-                        sh 'terraform init'
+                dir("${params.ENVIRONMENT}") {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-access'
+                    ]]) {
+                        sh '''
+                            terraform --version
+                            terraform init
+                        '''
                     }
                 }
             }
@@ -40,12 +58,16 @@ pipeline {
 
         stage('Terraform Plan') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-access'
-                ]]) {
-                    dir("${params.ENVIRONMENT}") {
-                        sh 'terraform plan -var-file="terraform.tfvars" -out=tfplan'
+                dir("${params.ENVIRONMENT}") {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-access'
+                    ]]) {
+                        sh '''
+                            terraform plan \
+                            -var-file="terraform.tfvars" \
+                            -out=tfplan
+                        '''
                     }
                 }
             }
@@ -53,12 +75,14 @@ pipeline {
 
         stage('Terraform Apply') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-access'
-                ]]) {
-                    dir("${params.ENVIRONMENT}") {
-                        sh 'terraform apply tfplan'
+                dir("${params.ENVIRONMENT}") {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-access'
+                    ]]) {
+                        sh '''
+                            terraform apply -auto-approve tfplan
+                        '''
                     }
                 }
             }
@@ -66,16 +90,25 @@ pipeline {
 
         stage('Terraform Output') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-access'
-                ]]) {
-                    dir("${params.ENVIRONMENT}") {
+                dir("${params.ENVIRONMENT}") {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-access'
+                    ]]) {
                         sh 'terraform output'
                     }
                 }
             }
         }
 
+    }
+
+    post {
+        success {
+            echo "Deployment to ${params.ENVIRONMENT} completed successfully!"
+        }
+        failure {
+            echo "Deployment failed. Check logs."
+        }
     }
 }
